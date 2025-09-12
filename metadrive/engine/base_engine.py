@@ -506,31 +506,44 @@ class BaseEngine(EngineCore, Randomizable):
         Note:
         Instead of calling this func directly, close Engine by using engine_utils.close_engine
         """
-        if len(self._managers) > 0:
+        # Guard against partially initialized engine (e.g., interface raised before _managers is set)
+        if hasattr(self, "_managers") and isinstance(self._managers, dict) and len(self._managers) > 0:
             for name, manager in self._managers.items():
                 setattr(self, name, None)
                 if manager is not None:
                     manager.destroy()
         # clear all objects in spawned_object
         # self.clear_objects([id for id in self._spawned_objects.keys()])
-        for id, obj in self._spawned_objects.items():
-            if id in self._object_policies:
-                self._object_policies.pop(id).destroy()
-            if id in self._object_tasks:
-                self._object_tasks.pop(id).destroy()
-            self._clean_color(obj.id)
-            obj.destroy()
-        for cls, pending_obj in self._dying_objects.items():
-            for obj in pending_obj:
-                self._clean_color(obj.id)
+        if hasattr(self, "_spawned_objects"):
+            for id, obj in list(self._spawned_objects.items()):
+                if hasattr(self, "_object_policies") and id in self._object_policies:
+                    self._object_policies.pop(id).destroy()
+                if hasattr(self, "_object_tasks") and id in self._object_tasks:
+                    self._object_tasks.pop(id).destroy()
+                try:
+                    self._clean_color(obj.id)
+                except Exception:
+                    pass
                 obj.destroy()
-        self._dying_objects = {}
-        if self.main_camera is not None:
+        if hasattr(self, "_dying_objects"):
+            for cls, pending_obj in self._dying_objects.items():
+                for obj in pending_obj:
+                    try:
+                        self._clean_color(obj.id)
+                    except Exception:
+                        pass
+                    obj.destroy()
+            self._dying_objects = {}
+        if hasattr(self, "main_camera") and self.main_camera is not None:
             self.main_camera.destroy()
-        self.interface.destroy()
+        if hasattr(self, "interface") and self.interface is not None:
+            try:
+                self.interface.destroy()
+            except Exception:
+                pass
         self.close_engine()
 
-        if self.top_down_renderer is not None:
+        if hasattr(self, "top_down_renderer") and self.top_down_renderer is not None:
             self.top_down_renderer.close()
             del self.top_down_renderer
             self.top_down_renderer = None

@@ -118,6 +118,9 @@ class PGTrafficManager(BaseManager):
                 lane_idx = lane.index
                 long = self.np_random.rand() * lane.length / 2
                 traffic_v_config = {"spawn_lane_index": lane_idx, "spawn_longitude": long}
+                # Apply configs for traffic vehicles before spawning
+                traffic_v_config.update(self.engine.global_config["traffic_vehicle_config"])
+                self._maybe_apply_trailer_cfg(traffic_v_config)
                 new_v = self.spawn_object(vehicle_type, vehicle_config=traffic_v_config)
                 from metadrive.policy.idm_policy import IDMPolicy
                 self.add_policy(new_v.id, IDMPolicy, new_v, self.generate_seed())
@@ -226,6 +229,8 @@ class PGTrafficManager(BaseManager):
                 vehicle_type = self.random_vehicle_type()
                 traffic_v_config = {"spawn_lane_index": lane.index, "spawn_longitude": long}
                 traffic_v_config.update(self.engine.global_config["traffic_vehicle_config"])
+                # Optionally add a kinematic trailer to traffic vehicles
+                self._maybe_apply_trailer_cfg(traffic_v_config)
                 random_v = self.spawn_object(vehicle_type, vehicle_config=traffic_v_config)
                 from metadrive.policy.idm_policy import IDMPolicy
                 self.add_policy(random_v.id, IDMPolicy, random_v, self.generate_seed())
@@ -269,6 +274,8 @@ class PGTrafficManager(BaseManager):
             for v_config in selected:
                 vehicle_type = self.random_vehicle_type()
                 v_config.update(self.engine.global_config["traffic_vehicle_config"])
+                # Optionally add a kinematic trailer to traffic vehicles
+                self._maybe_apply_trailer_cfg(v_config)
                 random_v = self.spawn_object(vehicle_type, vehicle_config=v_config)
                 seed = self.generate_seed()
                 self.add_policy(random_v.id, IDMPolicy, random_v, seed)
@@ -304,6 +311,33 @@ class PGTrafficManager(BaseManager):
         from metadrive.component.vehicle.vehicle_type import random_vehicle_type
         vehicle_type = random_vehicle_type(self.np_random, [0.2, 0.3, 0.3, 0.2, 0.0])
         return vehicle_type
+
+    def _maybe_apply_trailer_cfg(self, v_config: dict):
+        """
+        Merge a global traffic trailer config into a single vehicle_config when available.
+        Supports two formats under engine.global_config:
+        - traffic_trailer_kinematic: { enabled: True, ... }  -> applied directly
+        - traffic_trailer_kinematic: { probability: p, config: { ... } } -> applied with Bernoulli(p)
+        """
+        g = getattr(self.engine, "global_config", {}) or {}
+        tt = g.get("traffic_trailer_kinematic", None)
+        if not isinstance(tt, dict) or len(tt) == 0:
+            return
+        # Probabilistic wrapper
+        if "probability" in tt and "config" in tt and isinstance(tt["config"], dict):
+            prob = float(tt.get("probability", 1.0))
+            if self.np_random.rand() > max(0.0, min(1.0, prob)):
+                return
+            cfg = dict(tt["config"])  # shallow copy
+            cfg["enabled"] = True
+            v_config["trailer_kinematic"] = cfg
+            return
+        # Direct config
+        cfg = dict(tt)
+        if cfg.get("enabled", True) is not False:
+            cfg["enabled"] = True
+            v_config["trailer_kinematic"] = cfg
+        return
 
     def destroy(self) -> None:
         """
@@ -406,6 +440,8 @@ class MixedPGTrafficManager(PGTrafficManager):
             for v_config in selected:
                 vehicle_type = self.random_vehicle_type()
                 v_config.update(self.engine.global_config["traffic_vehicle_config"])
+                # Optionally add a kinematic trailer to traffic vehicles
+                self._maybe_apply_trailer_cfg(v_config)
                 random_v = self.spawn_object(vehicle_type, vehicle_config=v_config)
                 if self.np_random.random() < self.engine.global_config["rl_agent_ratio"]:
                     # print("Vehicle {} is assigned with RL policy!".format(random_v.id))

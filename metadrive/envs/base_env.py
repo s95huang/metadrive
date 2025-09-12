@@ -176,6 +176,16 @@ BASE_DEFAULT_CONFIG = dict(
         show_lane_line_detector=False,
         # Whether to turn on vehicle light, only available when enabling render-pipeline
         light=False,
+        # Optional: attach a kinematic trailer to this vehicle for visualization + collisions
+        trailer_kinematic=dict(
+            enabled=False,
+            length=None,
+            width=None,
+            height=None,
+            origin_to_hitch=None,
+            hitch_offset_on_tractor=None,
+            path=None,
+        ),
     ),
 
     # ===== Sensors =====
@@ -290,7 +300,10 @@ class BaseEnv(gym.Env):
             config = {}
         self.logger = get_logger()
         set_log_level(config.get("log_level", logging.DEBUG if config.get("debug", False) else logging.INFO))
-        merged_config = self.default_config().update(config, False, ["agent_configs", "sensors"])
+        # Allow flexible dict updates for selected keys without strict schema enforcement
+        merged_config = self.default_config().update(
+            config, False, ["agent_configs", "sensors", "traffic_trailer_kinematic"]
+        )
         global_config = self._post_process_config(merged_config)
 
         self.config = global_config

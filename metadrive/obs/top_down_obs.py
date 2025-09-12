@@ -163,12 +163,24 @@ class TopDownObservation(BaseObservation):
         ObjectGraphics.display(
             object=vehicle, surface=self.canvas_runtime, heading=ego_heading, color=ObjectGraphics.GREEN
         )
+        # Draw attached trailer for ego if present
+        trailer = getattr(vehicle, "_kinematic_trailer", None)
+        if trailer is not None:
+            th = trailer.heading_theta
+            th = th if abs(th) > 2 * np.pi / 180 else 0
+            ObjectGraphics.display(object=trailer, surface=self.canvas_runtime, heading=th, color=ObjectGraphics.PURPLE)
         for v in self.engine.traffic_manager.vehicles:
             if v is vehicle:
                 continue
             h = v.heading_theta
             h = h if abs(h) > 2 * np.pi / 180 else 0
             ObjectGraphics.display(object=v, surface=self.canvas_runtime, heading=h, color=ObjectGraphics.BLUE)
+            # Draw trailers for traffic vehicles if present
+            tv = getattr(v, "_kinematic_trailer", None)
+            if tv is not None:
+                hh = tv.heading_theta
+                hh = hh if abs(hh) > 2 * np.pi / 180 else 0
+                ObjectGraphics.display(object=tv, surface=self.canvas_runtime, heading=hh, color=ObjectGraphics.PURPLE)
 
         # Prepare a runtime canvas for rotation
         return self.obs_window.render(canvas=self.canvas_runtime, position=pos, heading=vehicle.heading_theta)

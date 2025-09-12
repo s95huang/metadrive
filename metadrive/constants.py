@@ -379,6 +379,7 @@ class Semantics:
     UNLABELED = label_color("UNLABELED", (0, 0, 0))
     CAR = label_color("CAR", (0, 0, 142))
     TRUCK = label_color("TRUCK", (0, 0, 70))
+    TRAILER = label_color("TRAILER", (0, 30, 70))
     PEDESTRIAN = label_color("PEDESTRIAN", (220, 20, 60))
     BIKE = label_color("BIKE", (119, 11, 32))  # bicycle
     TERRAIN = label_color("TERRAIN", (152, 251, 152))

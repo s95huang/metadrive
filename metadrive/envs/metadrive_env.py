@@ -52,6 +52,12 @@ METADRIVE_DEFAULT_CONFIG = dict(
     accident_prob=0.,  # accident may happen on each block with this probability, except multi-exits block
     static_traffic_object=True,  # object won't react to any collisions
 
+    # ===== Traffic Trailer (optional) =====
+    # Configure trailers for traffic vehicles. Two formats supported:
+    # 1) Direct config: a dict with fields for trailer_kinematic config (e.g., enabled/length/width/...)
+    # 2) Probabilistic wrapper: { probability: 0.5, config: { ... } }
+    traffic_trailer_kinematic=dict(),
+
     # ===== Others =====
     use_AI_protector=False,
     save_level=0.5,

@@ -163,6 +163,30 @@ class BaseVehicle(BaseObject, BaseVehicleState):
         # navigation module
         self.navigation: Optional[NodeNetworkNavigation] = None
 
+        # Optional kinematic trailer (render-only)
+        self._kinematic_trailer = None
+        try:
+            trailer_cfg = self.config.get("trailer_kinematic", None)
+        except Exception:
+            trailer_cfg = None
+        if trailer_cfg and trailer_cfg.get("enabled", False):
+            try:
+                # Lazy import to avoid circular deps in type modules
+                from metadrive.component.vehicle.kinematic_trailer import KinematicTrailer
+                self._kinematic_trailer = KinematicTrailer(self, trailer_cfg)
+                # Register to engine object registry so collisions/LiDAR/instance seg can resolve it
+                self.engine._spawned_objects[self._kinematic_trailer.id] = self._kinematic_trailer
+                try:
+                    self.engine._pick_color(self._kinematic_trailer.id)
+                except Exception:
+                    pass
+                # Attach to world for rendering and physics contact (kinematic body)
+                self._kinematic_trailer.attach_to_world(self.engine.origin, self.engine.physics_world)
+                # Initialize pose right away
+                self._kinematic_trailer.update()
+            except Exception as e:
+                logger.warning(f"Failed to set up kinematic trailer: {e}")
+
         # state info
         self.throttle_brake = 0.0
         self.steering = 0
@@ -274,6 +298,13 @@ class BaseVehicle(BaseObject, BaseVehicleState):
                     "navigation_right": navigation_turn_right
                 }
             )
+
+        # Update kinematic trailer pose if enabled
+        if self._kinematic_trailer is not None:
+            try:
+                self._kinematic_trailer.update()
+            except Exception as e:
+                logger.debug(f"Kinematic trailer update failed: {e}")
 
         return step_info
 
@@ -845,6 +876,20 @@ class BaseVehicle(BaseObject, BaseVehicleState):
 
     def destroy(self):
         super(BaseVehicle, self).destroy()
+        # Clean up trailer if any
+        if self._kinematic_trailer is not None:
+            try:
+                # Remove from registry
+                if self._kinematic_trailer.id in self.engine._spawned_objects:
+                    self.engine._spawned_objects.pop(self._kinematic_trailer.id, None)
+                try:
+                    self.engine._clean_color(self._kinematic_trailer.id)
+                except Exception:
+                    pass
+                self._kinematic_trailer.destroy()
+            except Exception:
+                pass
+            self._kinematic_trailer = None
         if self.navigation is not None:
             self.navigation.destroy()
         self.navigation = None
@@ -987,6 +1032,13 @@ class BaseVehicle(BaseObject, BaseVehicleState):
         if self.config["show_navi_mark"] and self.config["navigation_module"] and self.navigation is not None:
             self.navigation.attach_to_world(self.engine)
         super(BaseVehicle, self).attach_to_world(parent_node_path, physics_world)
+        # Ensure trailer is attached after vehicle is in the scene graph
+        if self._kinematic_trailer is not None and not self._kinematic_trailer.is_attached():
+            try:
+                self._kinematic_trailer.attach_to_world(self.engine.origin, self.engine.physics_world)
+                self._kinematic_trailer.update()
+            except Exception as e:
+                logger.debug(f"Attach trailer after vehicle failed: {e}")
 
     def set_break_down(self, break_down=True):
         self.break_down = break_down
