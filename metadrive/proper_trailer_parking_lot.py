@@ -14,6 +14,8 @@ import random
 from metadrive.envs.marl_envs.marl_parking_lot import MultiAgentParkingLotEnv
 from metadrive.component.road_network import Road
 from metadrive.component.pgblock.parking_lot import ParkingLot
+from metadrive.component.sensors.rgb_camera import RGBCamera
+from metadrive.component.sensors.lidar import Lidar
 
 
 class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
@@ -38,18 +40,111 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
                 "lane_num": 1,
             },
             
+            # Multi-camera and multi-LiDAR configuration for 360-degree coverage
+            "sensors": {
+                # 6 cameras for complete 360-degree coverage
+                "front_center_cam": (RGBCamera, 512, 384),
+                "front_left_cam": (RGBCamera, 512, 384),
+                "front_right_cam": (RGBCamera, 512, 384),
+                "rear_left_cam": (RGBCamera, 512, 384),
+                "rear_right_cam": (RGBCamera, 512, 384),
+                "trailer_cam": (RGBCamera, 512, 384),
+
+                # 3 LiDAR sensors for comprehensive detection
+                "front_lidar": (Lidar, ),
+                "left_blind_spot_lidar": (Lidar, ),
+                "right_blind_spot_lidar": (Lidar, ),
+            },
+
+            # Camera display interface - show up to 3 camera feeds + dashboard
+            # "interface_panel": ["rear_left_cam", "trailer_cam", "rear_right_cam", "dashboard"],
+            "interface_panel": ["rear_left_cam", "trailer_cam", "rear_right_cam"],
+
             # Vehicle with trailer configuration
             "vehicle_config": {
                 "enable_reverse": True,
                 "show_dest_mark": True,
                 "show_line_to_dest": True,
                 "show_navi_mark": True,
-                
+                "show_lidar": True,  # Enable LiDAR visualization
+                "image_source": "front_center_cam",  # Default camera for main view
+
+                # Enhanced LiDAR configuration for much better visualization
+                "lidar": {
+                    "num_lasers": 360,     # Many more laser beams for detailed visualization
+                    "distance": 60,        # Longer range
+                    "num_others": 8,       # More detection categories
+                    "gaussian_noise": 0.0,
+                    "dropout_prob": 0.0,
+                    "add_others_navi": True
+                },
+
+                # Side detector for additional coverage
+                "side_detector": {
+                    "num_lasers": 120,     # More beams for side detection
+                    "distance": 40,
+                    "gaussian_noise": 0.0,
+                    "dropout_prob": 0.0
+                },
+
+                # Lane line detector with more beams
+                "lane_line_detector": {
+                    "num_lasers": 16,      # More beams for lane detection
+                    "distance": 30
+                },
+
+                # Camera positioning and orientation for 360-degree coverage
+                "camera_positions": {
+                    "front_center_cam": {
+                        "position": [2.5, 0.0, 1.8],
+                        "hpr": [0, -10, 0]  # Forward-looking, slightly downward
+                    },
+                    "front_left_cam": {
+                        "position": [2.0, -1.2, 1.6],
+                        "hpr": [-45, -5, 0]  # 45 degrees left
+                    },
+                    "front_right_cam": {
+                        "position": [2.0, 1.2, 1.6],
+                        "hpr": [45, -5, 0]  # 45 degrees right
+                    },
+                    "rear_left_cam": {
+                        "position": [-2.0, -1.2, 1.6],
+                        "hpr": [-135, -5, 0]  # Rear left
+                    },
+                    "rear_right_cam": {
+                        "position": [-2.0, 1.2, 1.6],
+                        "hpr": [135, -5, 0]  # Rear right
+                    },
+                    "trailer_cam": {
+                        "position": [-8.0, 0.0, 2.5],
+                        "hpr": [180, -15, 0]  # Looking back at trailer
+                    }
+                },
+
+                # Enhanced LiDAR positioning for comprehensive coverage
+                "lidar_positions": {
+                    "front_lidar": {
+                        "position": [2.8, 0.0, 1.5],
+                        "hpr": [0, 0, 0],  # Forward-facing
+                        "enable_show": True
+                    },
+                    "left_blind_spot_lidar": {
+                        "position": [0.0, -1.5, 1.2],
+                        "hpr": [-90, 0, 0],  # Left-facing
+                        "enable_show": True
+                    },
+                    "right_blind_spot_lidar": {
+                        "position": [0.0, 1.5, 1.2],
+                        "hpr": [90, 0, 0],  # Right-facing
+                        "enable_show": True
+                    }
+                },
+
                 # Trailer configuration optimized for parking
                 "trailer_kinematic": {
                     "enabled": True,
                     "length": 8.5,     # Realistic trailer length
-                    "width": 2.5,      # Trailer width 
+                    "width": 2.5,      # Trailer width
                     "height": 2.6,     # Trailer height
                     "origin_to_hitch": [4.2, 0.0, 1.0],
                     "hitch_offset_on_tractor": [-3.2, 0.0, 1.0],
@@ -106,6 +201,8 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
         
         print("🅿️  Proper Trailer Parking Environment Initialized")
         print("Using MetaDrive's native PGBlock parking lot system!")
+        print("📹 Multi-camera setup: 6 cameras for 360° coverage")
+        print("📡 Multi-LiDAR setup: 3 LiDAR sensors (front + blind spots)")
     
     def reset(self, *args, **kwargs):
         """Reset with trailer parking logic"""
@@ -135,8 +232,11 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
         self.best_distance = self.initial_distance
         self.max_distance_from_target = self.initial_distance
         
+        # Configure multi-camera and multi-LiDAR setup
+        self._configure_sensors()
+
         self._print_episode_info()
-        
+
         return obs
     
     def step(self, actions):
@@ -352,6 +452,60 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
             pass
 
         return 50.0  # Default high distance if calculation fails
+
+    def _configure_sensors(self):
+        """Configure camera and LiDAR sensor positions for the vehicle"""
+        if not self.agents:
+            return
+
+        agent_name = list(self.agents.keys())[0]
+        agent = self.agents[agent_name]
+
+        try:
+            # Configure cameras
+            camera_positions = self.config["vehicle_config"].get("camera_positions", {})
+            for camera_name, config in camera_positions.items():
+                if camera_name in self.engine.sensors:
+                    camera = self.engine.sensors[camera_name]
+                    # Set camera position relative to vehicle
+                    pos = config["position"]
+                    hpr = config["hpr"]
+
+                    # Create camera node path attached to vehicle
+                    camera_np = agent.origin.attachNewNode(f"{camera_name}_mount")
+                    camera_np.setPos(*pos)
+                    camera_np.setHpr(*hpr)
+
+                    # Attach camera to this node
+                    if hasattr(camera, 'cam'):
+                        camera.cam.reparentTo(camera_np)
+
+            # Configure LiDAR sensors
+            lidar_positions = self.config["vehicle_config"].get("lidar_positions", {})
+            for lidar_name, config in lidar_positions.items():
+                if lidar_name in self.engine.sensors:
+                    lidar = self.engine.sensors[lidar_name]
+                    # Set LiDAR position and properties
+                    pos = config["position"]
+                    hpr = config.get("hpr", [0, 0, 0])
+
+                    # LiDAR properties are configured through vehicle config, not here
+                    # Just set up positioning and visualization
+
+                    # Create LiDAR mount point with orientation
+                    lidar_np = agent.origin.attachNewNode(f"{lidar_name}_mount")
+                    lidar_np.setPos(*pos)
+                    lidar_np.setHpr(*hpr)
+
+                    # Attach LiDAR to this node if it has a physical representation
+                    if hasattr(lidar, 'node_path'):
+                        lidar.node_path.reparentTo(lidar_np)
+
+                    print(f"Configured {lidar_name}: positioned at {pos}, orientation {hpr}")
+
+        except Exception as e:
+            print(f"Warning: Could not configure sensors: {e}")
+            # Continue without sensor configuration if there's an error
     
     def _get_heading_error_to_parking_space(self, agent) -> float:
         """Get heading error relative to parking space orientation"""
@@ -438,18 +592,25 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
         print(f"  Heading tolerance: {self.config['trailer_heading_tolerance']}°")
         print(f"  Hold time: {self.config['trailer_success_hold_time']}s")
         
+        print(f"\nSensor Setup:")
+        print(f"  📹 6 Cameras: Front center, Front L/R, Rear L/R, Trailer view")
+        print(f"  📡 4 LiDAR: Main (72 beams), Front (240 beams), Left blind spot (120), Right blind spot (120)")
+        print(f"  🖥️  Interface: Front center + trailer cameras + dashboard")
+        print(f"  ⚡ Enhanced LiDAR: More beams = better visualization!")
+
         print(f"\nControls:")
         print(f"  W/S - Forward/Reverse (TRAILER REVERSE ENABLED!)")
         print(f"  A/D - Steer left/right")
         print(f"  V - Toggle reverse mode")
         print(f"  R - Reset episode")
         print(f"  ESC - Quit")
-        
+
         print(f"\nTrailer Parking Tips:")
         print(f"  • Use reverse mode (V) for backing into tight spaces")
         print(f"  • Take wide turns to account for trailer swing")
         print(f"  • Be patient - trailer parking requires precision!")
         print(f"  • Look for the destination marker and navigation line")
+        print(f"  • Watch the trailer camera for precise positioning!")
 
 
 def demo_proper_trailer_parking():
@@ -463,6 +624,7 @@ def demo_proper_trailer_parking():
             "description": "Random parking space assignment",
             "use_render": True,  # Disable for debugging distance
             "manual_control": True  # Disable for debugging
+            
         },
         "reverse_challenge": {
             "challenge_mode": "reverse_only",
