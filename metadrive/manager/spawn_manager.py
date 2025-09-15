@@ -117,8 +117,18 @@ class SpawnManager(BaseManager):
     def _auto_fill_spawn_roads_randomly(self, spawn_roads):
         """It is used for shuffling the config"""
 
-        num_slots = int(floor(self.exit_length / SpawnManager.RESPAWN_REGION_LONGITUDE))
-        interval = self.exit_length / num_slots
+        # Adjust spawn spacing if trailers are enabled
+        from metadrive.engine.engine_utils import get_engine
+        trailer_length_estimate = self._get_trailer_length_estimate(get_engine()) if hasattr(self, '_get_trailer_length_estimate') else 0.0
+        # Compute effective spacing; ensure at least one slot to avoid division-by-zero for short exits
+        base_spacing = max(SpawnManager.RESPAWN_REGION_LONGITUDE, 1.0)
+        effective_spawn_length = base_spacing + max(0.0, trailer_length_estimate)
+
+        num_slots = int(floor(self.exit_length / effective_spawn_length))
+        if num_slots < 1:
+            num_slots = 1
+            effective_spawn_length = self.exit_length
+        interval = self.exit_length / float(num_slots)
         self._longitude_spawn_interval = interval
         if self.num_agents is not None:
             assert self.num_agents > 0 or self.num_agents == -1
@@ -138,7 +148,7 @@ class SpawnManager(BaseManager):
         for i, road in enumerate(spawn_roads):
             for lane_idx in range(self.lane_num):
                 for j in range(num_slots):
-                    long = 1 / 2 * self.RESPAWN_REGION_LONGITUDE + j * self.RESPAWN_REGION_LONGITUDE
+                    long = 1 / 2 * effective_spawn_length + j * effective_spawn_length
                     lane_tuple = road.lane_index(lane_idx)  # like (>>>, 1C0_0_, 1) and so on.
                     agent_configs.append(
                         Config(
@@ -160,13 +170,44 @@ class SpawnManager(BaseManager):
     def step(self):
         self.spawn_places_used = []
 
+    def _get_trailer_length_estimate(self, engine):
+        """Get estimated trailer length from configuration if trailers are enabled"""
+        trailer_length = 0.0
+        
+        # Check ego vehicle trailer config
+        if hasattr(engine, 'global_config') and engine.global_config:
+            vehicle_config = engine.global_config.get('vehicle_config', {})
+            trailer_config = vehicle_config.get('trailer_kinematic', {})
+            if trailer_config.get('enabled', False):
+                trailer_length = max(trailer_length, trailer_config.get('length', 3.2))
+            
+            # Check traffic vehicle trailer config
+            traffic_trailer = engine.global_config.get('traffic_trailer_kinematic', {})
+            if isinstance(traffic_trailer, dict):
+                if 'config' in traffic_trailer:
+                    # Probabilistic format: {probability: p, config: {...}}
+                    config = traffic_trailer['config']
+                    if config.get('enabled', False):
+                        trailer_length = max(trailer_length, config.get('length', 3.0))
+                elif traffic_trailer.get('enabled', False):
+                    # Direct format: {enabled: True, length: x, ...}
+                    trailer_length = max(trailer_length, traffic_trailer.get('length', 3.0))
+        
+        # Add some extra safety margin for hitch connection
+        return trailer_length + 1.0 if trailer_length > 0 else 0.0
+
     def get_available_respawn_places(self, map, randomize=False):
         """
         In each episode, we allow the vehicles to respawn at the start of road, randomize will give vehicles a random
-        position in the respawn region
+        position in the respawn region. Now accounts for trailer length in collision detection.
         """
         engine = get_engine()
         ret = {}
+        
+        # Get trailer length estimate for extended collision detection
+        trailer_length = self._get_trailer_length_estimate(engine)
+        extended_longitude = self.RESPAWN_REGION_LONGITUDE + trailer_length
+        
         for bid, bp in self.safe_spawn_places.items():
             if bid in self.spawn_places_used:
                 continue
@@ -185,17 +226,34 @@ class SpawnManager(BaseManager):
 
             spawn_point_position = bp["spawn_point_position"]
             lane_heading = bp["spawn_point_heading"]
+            
+            # Use extended collision detection region if trailers are present
+            collision_length = extended_longitude if trailer_length > 0 else self.RESPAWN_REGION_LONGITUDE
+            
+            # If trailers are present, shift detection position backward to account for trailer space
+            detection_position = spawn_point_position
+            if trailer_length > 0:
+                # Calculate backward offset (opposite to heading direction)
+                import math
+                heading_rad = math.radians(lane_heading)
+                backward_offset = trailer_length / 2  # Half trailer length to center the extended detection box
+                detection_x = spawn_point_position[0] - backward_offset * math.cos(heading_rad)
+                detection_y = spawn_point_position[1] - backward_offset * math.sin(heading_rad)
+                detection_position = (detection_x, detection_y)
+            
             result = rect_region_detection(
-                engine, spawn_point_position, lane_heading, self.RESPAWN_REGION_LONGITUDE, self.RESPAWN_REGION_LATERAL,
+                engine, detection_position, lane_heading, collision_length, self.RESPAWN_REGION_LATERAL,
                 CollisionGroup.Vehicle
             )
             if (engine.global_config["debug"] or engine.global_config["debug_physics_world"]) \
                     and bp.get("need_debug", True):
-                shape = BulletBoxShape(Vec3(self.RESPAWN_REGION_LONGITUDE / 2, self.RESPAWN_REGION_LATERAL / 2, 1))
+                # Use same collision length and position for debug visualization
+                debug_length = collision_length
+                shape = BulletBoxShape(Vec3(debug_length / 2, self.RESPAWN_REGION_LATERAL / 2, 1))
                 vis_body = engine.render.attach_new_node(BulletGhostNode("debug"))
                 vis_body.node().addShape(shape)
                 vis_body.setH(panda_heading(lane_heading))
-                vis_body.setPos(panda_vector(spawn_point_position, z=2))
+                vis_body.setPos(panda_vector(detection_position, z=2))
                 engine.physics_world.dynamic_world.attach(vis_body.node())
                 vis_body.node().setIntoCollideMask(CollisionGroup.AllOff)
                 bp.force_set("need_debug", False)

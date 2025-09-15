@@ -281,6 +281,10 @@ BASE_DEFAULT_CONFIG = dict(
     # If True, when creating and replaying object trajectories, use the same ID as in dataset
     force_reuse_object_name=False,
 
+    # ===== Misc =====
+    # Optional free-form description string for experiment bookkeeping
+    description=None,
+
     # ===== randomization =====
     num_scenarios=1  # the number of scenarios in this environment
 )

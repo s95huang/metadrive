@@ -51,6 +51,14 @@ class KinematicTrailer(BaseObject):
         # Internal state: previous trailer axle world position for heading update
         # We define axle at the point: origin - (origin_to_hitch projected on X), i.e., along -X from hitch
         self._prev_axle_world: Optional[np.ndarray] = None
+        
+        # Smoothing and interpolation state for smoother motion
+        self._prev_position: Optional[np.ndarray] = None
+        self._prev_heading: Optional[float] = None
+        self._velocity_history = []  # Track recent velocities for smoothing
+        self._position_smoothing_factor = 0.1  # Adjust for smoothness vs responsiveness
+        self._heading_smoothing_factor = 0.15  # Different factor for heading
+        self._max_velocity_history = 5  # Number of velocity samples to keep
 
         # Keep tractor reference
         self._tractor = tractor
@@ -58,8 +66,7 @@ class KinematicTrailer(BaseObject):
         # Visualization
         self._add_visualization()
 
-        # Physics body (kinematic rigid, box collision)
-        self._create_body()
+        # Physics body will be created when attached to world to avoid collision at origin
 
     def _add_visualization(self):
         # Try load model; fallback to wireframe box
@@ -167,10 +174,27 @@ class KinematicTrailer(BaseObject):
     def update_pose(self):
         """
         Update trailer pose based on the tractor hitch position and previous axle position.
+        Handles both forward and reverse motion with smooth interpolation and proper trailer dynamics.
         """
         hitch = self._hitch_world_pos()
         drawbar = self._drawbar_length()
-
+        
+        # Track tractor velocity for adaptive smoothing
+        tractor_speed = abs(self._tractor.speed) if hasattr(self._tractor, 'speed') else 0
+        self._velocity_history.append(tractor_speed)
+        if len(self._velocity_history) > self._max_velocity_history:
+            self._velocity_history.pop(0)
+        
+        avg_speed = sum(self._velocity_history) / len(self._velocity_history)
+        
+        # Adaptive smoothing based on speed - more smoothing at higher speeds
+        speed_factor = min(avg_speed / 10.0, 1.0)  # Normalize to 0-1 range
+        position_smooth = self._position_smoothing_factor * (1 + speed_factor)
+        heading_smooth = self._heading_smoothing_factor * (1 + speed_factor)
+        
+        # Determine tractor movement direction
+        is_forward = self._tractor.is_moving_forward()
+        
         # Initialize previous axle directly behind tractor on first call
         if self._prev_axle_world is None:
             heading = self._tractor.heading
@@ -178,30 +202,97 @@ class KinematicTrailer(BaseObject):
                                               hitch[1] - drawbar * heading[1],
                                               hitch[2]], dtype=float)
 
-        # Compute trailer heading from vector axle->hitch
+        # Calculate target axle position based on kinematics
         vec = hitch - self._prev_axle_world
-        yaw = math.atan2(vec[1], vec[0])
+        target_yaw = math.atan2(vec[1], vec[0])
+        
+        # Different behavior for forward vs reverse
+        if is_forward is False:  # Moving backward
+            # In reverse, apply more aggressive smoothing to prevent jackknifing
+            reverse_smoothing = 0.8
+            if hasattr(self, '_last_yaw'):
+                yaw_diff = target_yaw - self._last_yaw
+                # Handle angle wrap-around
+                if yaw_diff > math.pi:
+                    yaw_diff -= 2 * math.pi
+                elif yaw_diff < -math.pi:
+                    yaw_diff += 2 * math.pi
+                target_yaw = self._last_yaw + reverse_smoothing * yaw_diff
+        
+        # Smooth heading transitions
+        if self._prev_heading is not None:
+            yaw_diff = target_yaw - self._prev_heading
+            # Handle angle wrap-around
+            if yaw_diff > math.pi:
+                yaw_diff -= 2 * math.pi
+            elif yaw_diff < -math.pi:
+                yaw_diff += 2 * math.pi
+            
+            # Apply smoothing
+            yaw = self._prev_heading + heading_smooth * yaw_diff
+        else:
+            yaw = target_yaw
+        
+        self._prev_heading = yaw
+        self._last_yaw = yaw
+        
         dir_xy = np.array([math.cos(yaw), math.sin(yaw)], dtype=float)
-
-        # New axle position keeps fixed drawbar distance to hitch
-        axle_world = np.array([hitch[0] - drawbar * dir_xy[0],
+        
+        # Calculate target axle position
+        target_axle = np.array([hitch[0] - drawbar * dir_xy[0],
                                hitch[1] - drawbar * dir_xy[1],
                                hitch[2]], dtype=float)
+        
+        # Smooth axle position transitions
+        if self._prev_axle_world is not None:
+            # Interpolate between previous and target axle positions
+            alpha = position_smooth
+            axle_world = (1 - alpha) * self._prev_axle_world + alpha * target_axle
+        else:
+            axle_world = target_axle
+        
         self._prev_axle_world = axle_world
 
-        # Origin is at hitch minus rotated origin_to_hitch
+        # Calculate trailer origin position from axle
         R = np.array([[dir_xy[0], -dir_xy[1]], [dir_xy[1], dir_xy[0]]], dtype=float)
         offset_xy = R @ self.origin_to_hitch[:2]
-        origin_world = np.array([hitch[0] - offset_xy[0], hitch[1] - offset_xy[1], hitch[2] - self.origin_to_hitch[2]],
+        target_origin = np.array([hitch[0] - offset_xy[0], hitch[1] - offset_xy[1], hitch[2] - self.origin_to_hitch[2]],
                                 dtype=float)
+        
+        # Smooth origin position
+        if self._prev_position is not None:
+            # Interpolate between previous and target positions
+            alpha = position_smooth
+            origin_world = (1 - alpha) * self._prev_position + alpha * target_origin
+        else:
+            origin_world = target_origin
+        
+        self._prev_position = origin_world
 
-        # Apply pose
+        # Apply smoothed pose
         self.set_position([origin_world[0], origin_world[1], origin_world[2]])
         self.set_heading_theta(yaw)
 
     # Convenience alias
     def update(self):
         self.update_pose()
+
+    def attach_to_world(self, parent_node_path, physics_world):
+        """Override to create physics body and position correctly when attached"""
+        # Create physics body if not already created
+        if not hasattr(self, '_bodies') or not self._bodies:
+            self._create_body()
+        
+        # Update position before attaching to avoid spawn collision
+        self.update_pose()
+        
+        # Call parent attach
+        super().attach_to_world(parent_node_path, physics_world)
+
+    def destroy(self):
+        """Override destroy to ensure proper physics cleanup"""
+        # Call parent destroy which handles physics cleanup properly
+        super().destroy()
 
     # Required properties for drawing and utilities
     @property

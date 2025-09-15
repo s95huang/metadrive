@@ -54,9 +54,12 @@ class KeyboardController(Controller):
             self.inputs.watchWithModifiers('turnLeft', 'a')
             self.inputs.watchWithModifiers('turnRight', 'd')
             self.inputs.watchWithModifiers('takeover', 'space')
+            self.inputs.watchWithModifiers('reverseToggle', 'v')
         self.steering = 0.
         self.throttle_brake = 0.
         self.takeover = False
+        self.reverse_mode = False
+        self._prev_reverse_key = False  # Track previous V key state for toggle
         self.np_random = np.random.RandomState(None)
 
     def process_input(self, vehicle):
@@ -74,12 +77,23 @@ class KeyboardController(Controller):
                 self.takeover = True
             else:
                 self.takeover = False
+            if self.inputs.isSet('reverseToggle'):
+                self.reverse_mode = not self.reverse_mode
+                print(f"Reverse mode: {'ON' if self.reverse_mode else 'OFF'}")
         else:
             key_press = pygame.key.get_pressed()
             left_key_pressed = key_press[pygame.K_a]
             right_key_pressed = key_press[pygame.K_d]
             up_key_pressed = key_press[pygame.K_w]
             down_key_pressed = key_press[pygame.K_s]
+            
+            # Toggle reverse mode on V key press (not hold)
+            reverse_key_pressed = key_press[pygame.K_v]
+            if reverse_key_pressed and not self._prev_reverse_key:
+                self.reverse_mode = not self.reverse_mode
+                print(f"Reverse mode: {'ON' if self.reverse_mode else 'OFF'}")
+            self._prev_reverse_key = reverse_key_pressed
+            
             # TODO: We haven't implement takeover event when using Pygame renderer.
 
         # If no left or right is pressed, steering decays to the center.
@@ -100,6 +114,10 @@ class KeyboardController(Controller):
                 self.steering -= self.STEERING_INCREMENT
             else:  # If right is pressed but steering is in left, steering back to right side a little faster.
                 self.steering -= self.STEERING_INCREMENT_WHEN_INVERSE_DIRECTION
+
+        # In reverse mode, swap forward/backward behavior
+        if self.reverse_mode:
+            up_key_pressed, down_key_pressed = down_key_pressed, up_key_pressed
 
         # If no up or down is pressed, throttle decays to the center.
         if not (up_key_pressed or down_key_pressed):

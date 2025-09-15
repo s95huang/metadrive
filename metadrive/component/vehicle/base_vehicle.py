@@ -180,10 +180,8 @@ class BaseVehicle(BaseObject, BaseVehicleState):
                     self.engine._pick_color(self._kinematic_trailer.id)
                 except Exception:
                     pass
-                # Attach to world for rendering and physics contact (kinematic body)
-                self._kinematic_trailer.attach_to_world(self.engine.origin, self.engine.physics_world)
-                # Initialize pose right away
-                self._kinematic_trailer.update()
+                # Don't attach trailer to world immediately - wait until vehicle is properly positioned
+                # The trailer will be attached later in attach_to_world() method
             except Exception as e:
                 logger.warning(f"Failed to set up kinematic trailer: {e}")
 
@@ -591,6 +589,25 @@ class BaseVehicle(BaseObject, BaseVehicleState):
         # direction = self.system.getForwardVector()
         # return np.asarray([direction[0], direction[1]])
 
+    def is_moving_forward(self):
+        """
+        Determine if the vehicle is moving forward or backward based on velocity direction
+        relative to its heading.
+        
+        Returns:
+            bool: True if moving forward, False if moving backward, None if stationary
+        """
+        if abs(self.speed) < 0.1:  # Stationary threshold
+            return None
+        
+        # Calculate dot product between velocity and heading direction
+        velocity = self.velocity
+        heading = self.heading
+        
+        # Dot product: positive = forward, negative = backward
+        dot_product = velocity[0] * heading[0] + velocity[1] * heading[1]
+        return dot_product > 0
+
     """---------------------------------------- some math tool ----------------------------------------------"""
 
     def heading_diff(self, target_lane):
@@ -879,6 +896,10 @@ class BaseVehicle(BaseObject, BaseVehicleState):
         # Clean up trailer if any
         if self._kinematic_trailer is not None:
             try:
+                # Ensure trailer is properly detached and destroyed
+                if hasattr(self._kinematic_trailer, 'detach_from_world'):
+                    self._kinematic_trailer.detach_from_world(self.engine.physics_world)
+                
                 # Remove from registry
                 if self._kinematic_trailer.id in self.engine._spawned_objects:
                     self.engine._spawned_objects.pop(self._kinematic_trailer.id, None)
@@ -886,10 +907,14 @@ class BaseVehicle(BaseObject, BaseVehicleState):
                     self.engine._clean_color(self._kinematic_trailer.id)
                 except Exception:
                     pass
+                
+                # Force destroy the trailer
                 self._kinematic_trailer.destroy()
-            except Exception:
-                pass
-            self._kinematic_trailer = None
+            except Exception as e:
+                # Log the error but don't let it break the cleanup
+                print(f"Warning: Error destroying kinematic trailer: {e}")
+            finally:
+                self._kinematic_trailer = None
         if self.navigation is not None:
             self.navigation.destroy()
         self.navigation = None
@@ -1078,6 +1103,12 @@ class BaseVehicle(BaseObject, BaseVehicleState):
         return c
 
     def before_reset(self):
+        # Detach auxiliary modules before engine cleans physics world
+        if self._kinematic_trailer is not None:
+            try:
+                self._kinematic_trailer.detach_from_world(self.engine.physics_world)
+            except Exception:
+                pass
         for obj in [self.navigation]:
             if obj is not None and hasattr(obj, "before_reset"):
                 obj.before_reset()

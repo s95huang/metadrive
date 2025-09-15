@@ -5,6 +5,7 @@ Demo: drive with a kinematic, collidable trailer and visualize in RGB/Depth/Sema
 Controls:
   - W/A/S/D to drive
   - Q to toggle perspective (third-person <-> top-down)
+  - V to toggle reverse mode
   - R to reset
   - ESC to quit
 """
@@ -25,6 +26,7 @@ def main(onscreen=True):
             manual_control=True,
             show_logo=False,
             show_fps=False,
+            force_destroy=True,
             # Make the trailer clearly visible in third-person view
             camera_dist=12.0,
             camera_height=3.0,
@@ -51,12 +53,15 @@ def main(onscreen=True):
                 "depth_camera": (DepthCamera, *res),
                 "semantic": (SemanticCamera, *res),
             },
+            image_on_cuda=False,
             vehicle_config=dict(
                 # visualization toggles
                 show_navi_mark=False,
                 show_line_to_navi_mark=False,
                 show_lidar=True,
                 image_source="main_camera",
+                # enable reverse mode
+                enable_reverse=True,
                 # trailer settings
                 trailer_kinematic=dict(
                     enabled=True,
@@ -74,11 +79,23 @@ def main(onscreen=True):
 
     try:
         env.reset()
+        print("Controls:")
+        print("  - W/A/S/D to drive")
+        print("  - V to toggle reverse mode")
+        print("  - Q to toggle perspective (third-person <-> top-down)")
+        print("  - R to reset")
+        print("  - ESC to quit")
+        
         # Simple idle loop; manual control handles driving.
-        for _ in range(100000):
+        for i in range(100000):
             _, _, tm, tc, _ = env.step([0.0, 0.0])
             if tm or tc:
-                env.reset()
+                print(f"Episode ended at step {i}, resetting...")
+                try:
+                    env.reset()
+                except Exception as e:
+                    print(f"Reset failed: {e}")
+                    break
     finally:
         env.close()
 
