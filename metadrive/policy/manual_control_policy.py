@@ -70,7 +70,7 @@ class ManualControlPolicy(EnvInputPolicy):
         self.controller.process_others(takeover_callback=self.toggle_takeover)
 
         try:
-            if self.engine.current_track_agent.expert_takeover and self.enable_expert:
+            if self.engine.current_track_agent is not None and self.engine.current_track_agent.expert_takeover and self.enable_expert:
                 return expert(self.engine.current_track_agent)
         except (ValueError, AssertionError):
             # if observation doesn't match, fall back to manual control

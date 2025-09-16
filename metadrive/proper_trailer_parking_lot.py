@@ -10,12 +10,77 @@ import numpy as np
 import math
 from typing import Dict, Optional, Tuple, List
 import random
+import os
+
+# Optional imports for bird's eye view visualization
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+
+try:
+    import gymnasium as gym
+    GYMNASIUM_AVAILABLE = True
+except ImportError:
+    try:
+        import gym
+        GYMNASIUM_AVAILABLE = True
+    except ImportError:
+        GYMNASIUM_AVAILABLE = False
 
 from metadrive.envs.marl_envs.marl_parking_lot import MultiAgentParkingLotEnv
 from metadrive.component.road_network import Road
 from metadrive.component.pgblock.parking_lot import ParkingLot
 from metadrive.component.sensors.rgb_camera import RGBCamera
 from metadrive.component.sensors.lidar import Lidar
+from metadrive.obs.observation_base import BaseObservation
+from metadrive.obs.image_obs import ImageObservation
+
+# Bird's Eye View sensor size configuration
+sensor_size = (1, 1) if os.getenv('TEST_DOC') else (200, 200)
+
+
+class TrailerParkingBirdEyeObservation(BaseObservation):
+    """
+    Custom observation class that provides bird's eye view and multiple camera angles
+    for trailer parking scenarios.
+    """
+    def __init__(self, config):
+        super(TrailerParkingBirdEyeObservation, self).__init__(config)
+        self.rgb = ImageObservation(config, "main_camera", config["norm_pixel"])
+
+    @property
+    def observation_space(self):
+        """Define observation space with bird's eye view and multiple entry angles"""
+        if GYMNASIUM_AVAILABLE:
+            os = {"entry_{}".format(idx): self.rgb.observation_space for idx in range(4)}
+            os["top_down"] = self.rgb.observation_space
+            return gym.spaces.Dict(os)
+        else:
+            # Fallback: return the base rgb observation space
+            return self.rgb.observation_space
+
+    def observe(self, vehicle):
+        """Generate observations with bird's eye view and multiple camera angles"""
+        ret = {}
+        # The first rendered image is the top-down view
+        ret["top_down"] = self.rgb.observe()
+        # The camera can be borrowed to render new images with new poses
+        for idx in range(4):
+            ret["entry_{}".format(idx)] = self.rgb.observe(self.engine.origin,
+                                                           position=[70, 8.75, 8],
+                                                           hpr=[idx * 90, -15, 0])
+        return ret
+
+
+def reset_sensors(self):
+    """
+    Put the main camera to the center of the parking lot for bird's eye view
+    """
+    self.main_camera.stop_track()
+    self.main_camera.set_bird_view_pos([70, 8.75])
+    self.main_camera.top_down_camera_height = 50
 
 
 class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
@@ -32,7 +97,13 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
         config.update({
             # Use single agent for simplicity
             "num_agents": 1,
-            
+
+            # Standard observation configuration
+            # "agent_observation": TrailerParkingBirdEyeObservation,  # Disabled to prevent switching
+            "image_observation": True,
+            "window_size": (1024, 768),  # Normal window size
+            "norm_pixel": True,  # Normalize pixel values
+
             # Parking lot configuration - these create REAL parking spaces
             "parking_space_num": 16,  # Total parking spaces (8 per side)
             "map_config": {
@@ -54,11 +125,12 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
                 "front_lidar": (Lidar, ),
                 "left_blind_spot_lidar": (Lidar, ),
                 "right_blind_spot_lidar": (Lidar, ),
+                # Bird's eye view camera for dashboard
+                "bird_eye_cam": (RGBCamera, 200, 200),
             },
 
-            # Camera display interface - show up to 3 camera feeds + dashboard
-            # "interface_panel": ["rear_left_cam", "trailer_cam", "rear_right_cam", "dashboard"],
-            "interface_panel": ["rear_left_cam", "trailer_cam", "rear_right_cam"],
+            # Camera display interface - show cameras + bird's eye view on dashboard
+            "interface_panel": ["bird_eye_cam", "trailer_cam", "rear_left_cam"],
 
             # Vehicle with trailer configuration
             "vehicle_config": {
@@ -116,8 +188,12 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
                         "hpr": [135, -5, 0]  # Rear right
                     },
                     "trailer_cam": {
-                        "position": [-8.0, 0.0, 2.5],
+                        "position": [-2.0, 0.0, 1.6],
                         "hpr": [180, -15, 0]  # Looking back at trailer
+                    },
+                    "bird_eye_cam": {
+                        "position": [0.0, 0.0, 50.0],  # High above the vehicle
+                        "hpr": [0, -90, 0]  # Looking straight down
                     }
                 },
 
@@ -168,6 +244,9 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
             "show_fps": True,
             "show_logo": False,
 
+            # Fix manual control issues
+            "agent_policy": "manual",  # Explicitly set manual policy
+
             # Relax early termination so episode doesn't end immediately when slightly out of lane or near lines
             "out_of_road_done": False,
             "on_continuous_line_done": False,
@@ -187,22 +266,25 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
     
     def __init__(self, config: Dict = None):
         super().__init__(config)
-        
+
         # Trailer parking specific state
         self.success_hold_timer = 0.0
         self.initial_distance = 0.0
         self.best_distance = float('inf')
         self.target_parking_space = None
-        
+
         # Performance tracking
         self.episode_start_time = 0
         self.collision_count = 0
         self.max_distance_from_target = 0.0
-        
+
+        # Note: Bird's eye view will be available on dashboard instead of main camera
+
         print("🅿️  Proper Trailer Parking Environment Initialized")
         print("Using MetaDrive's native PGBlock parking lot system!")
-        print("📹 Multi-camera setup: 6 cameras for 360° coverage")
+        print("📹 Multi-camera setup: 6 cameras for 360° coverage + Bird's Eye View")
         print("📡 Multi-LiDAR setup: 3 LiDAR sensors (front + blind spots)")
+        print("🦅 Bird's Eye View: Top-down and multiple entry angle observations")
     
     def reset(self, *args, **kwargs):
         """Reset with trailer parking logic"""
@@ -234,6 +316,12 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
         
         # Configure multi-camera and multi-LiDAR setup
         self._configure_sensors()
+
+        # Ensure proper agent tracking for manual control
+        if self.agents and hasattr(self.engine, 'set_current_track_agent'):
+            agent_name = list(self.agents.keys())[0]
+            agent = self.agents[agent_name]
+            self.engine.set_current_track_agent(agent_name)
 
         self._print_episode_info()
 
@@ -613,6 +701,73 @@ class ProperTrailerParkingEnv(MultiAgentParkingLotEnv):
         print(f"  • Watch the trailer camera for precise positioning!")
 
 
+def demo_bird_eye_view():
+    """Demo the bird's eye view observations"""
+    from metadrive.utils.doc_utils import generate_gif
+
+    # Simple configuration for bird's eye view demo
+    config = {
+        "challenge_mode": "random",
+        "use_render": True,
+        "manual_control": False,  # Automated for demo
+        "horizon": 500,
+        "show_fps": False,
+        "show_logo": False,
+    }
+
+    env = ProperTrailerParkingEnv(config)
+    frames = []
+
+    try:
+        env.reset()
+        print("Bird's Eye View Observation Demo")
+        print("Observation space:", env.observation_space)
+
+        for step in range(1 if os.getenv('TEST_DOC') else 100):
+            # Simple forward/turning action for demo
+            action = {"agent0": np.array([0.5, -0.3])}  # Forward with slight left turn
+            o, r, d, t, info = env.step(action)
+
+            # Check if observation has the bird's eye view structure
+            if isinstance(o, dict) and "agent0" in o:
+                obs_data = o["agent0"]
+                if isinstance(obs_data, dict) and "top_down" in obs_data:
+                    # Visualize bird's eye view observations
+                    o_1 = obs_data["entry_0"][..., -1] if "entry_0" in obs_data else None
+                    o_2 = obs_data["entry_1"][..., -1] if "entry_1" in obs_data else None
+                    o_3 = obs_data["entry_2"][..., -1] if "entry_2" in obs_data else None
+                    o_4 = obs_data["entry_3"][..., -1] if "entry_3" in obs_data else None
+                    o_5 = obs_data["top_down"][..., -1] if "top_down" in obs_data else None
+
+                    if all(x is not None for x in [o_1, o_2, o_3, o_4, o_5]) and CV2_AVAILABLE:
+                        ret = cv2.hconcat([o_1, o_2, o_3, o_4, o_5]) * 255
+                        ret = ret.astype(np.uint8)
+                        frames.append(ret[::2, ::2, ::-1])
+                    elif all(x is not None for x in [o_1, o_2, o_3, o_4, o_5]):
+                        # Fallback without cv2: just use numpy concatenation
+                        ret = np.concatenate([o_1, o_2, o_3, o_4, o_5], axis=1) * 255
+                        ret = ret.astype(np.uint8)
+                        frames.append(ret[::2, ::2])
+
+            # Break early if done
+            if isinstance(d, dict) and d.get("agent0"):
+                break
+            elif d:
+                break
+
+        if frames:
+            print(f"Generated {len(frames)} frames with bird's eye view observations")
+            if not os.getenv('TEST_DOC'):
+                generate_gif(frames[-50:])  # Show last 50 frames
+        else:
+            print("No bird's eye view frames captured - check observation structure")
+
+    except Exception as e:
+        print(f"Bird's eye view demo error: {e}")
+    finally:
+        env.close()
+
+
 def demo_proper_trailer_parking():
     """Demo the proper trailer parking environment"""
 
@@ -745,4 +900,9 @@ def demo_proper_trailer_parking():
 
 
 if __name__ == "__main__":
-    demo_proper_trailer_parking()
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "bird_eye":
+        demo_bird_eye_view()
+    else:
+        demo_proper_trailer_parking()
